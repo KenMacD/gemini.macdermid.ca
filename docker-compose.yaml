@@ -1,0 +1,15 @@
+version: "3"
+
+services:
+  gemini:
+    image: adrianhesketh/gemini
+    container_name: gemini
+    restart: unless-stopped
+    environment:
+      - PORT=1965
+      - DOMAIN=gemini.macdermid.ca
+    volumes:
+      - ./certs:/certs
+      - ./content:/content
+    ports:
+      - "1965:1965/tcp"

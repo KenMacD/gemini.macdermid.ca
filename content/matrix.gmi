@@ -1,0 +1,176 @@
+# Setting up Synapse—Matrix homeserver—behind Cloudflare
+
+## Why?
+
+There a lots of instructions on setting up Synapse homeserver. I had two requirements I wanted to follow in making mine. First I wanted everything in Docker, and second I didn't want to open any external ports.
+
+To do this I used a Cloudflare Argo Tunnel to talk to the service in docker. While Matrix can use a different port and/or domain for clients and federation I used the same one.
+
+## Set up a Cloudflare Teams account
+
+Cloudflare appears to charge for their Argo Tunnel setup on regular accounts, but for some reason doesn't have the same requirement on Team accounts. It might be possible to skip this step, but if you run in to Argo permissions errors give it a try. Browse to their team url and create a free team:
+
+=> https://dash.teams.cloudflare.com/ Cloudflare Teams dashboard
+
+## Create an Argo Tunnel
+
+Tunnels can be created when the service starts, but the issue with that is that the domain will appear and disappear from DNS depending on if the service is running. Instead I created a tunnel manually, mostly following the directions in the Argo documentation:
+
+=> https://developers.cloudflare.com/argo-tunnel/getting-started/high-level-steps Argo high level setup steps
+
+Install `cloudflared`, and run `cloudflared tunnel login`. I did this from my local machine as there's no reason to log in to cloudflare from the hosting instance. The login will create a `cert.pem` file. In Linux will will be stored in `~/.cloudflared/cert.pem`.
+
+I'm using the same tunnel for multiple services, so I've named it based on the host to which it will tunnel: `cloudflared tunnel create instance-1`. This will create a UUID file something like `~/.cloudflared/76d3f4c5-9be6-485f-9a16-2e705d11255c.json`. Copy this file to the hosting instance (which I'll continue to call `instance-1`).
+
+Create a basic `config.yaml` for the tunnel. For now we will configure it with a simple built-in "Hello World" server. It should look something like:
+
+``` yaml
+tunnel: 76d3f4c5-9be6-485f-9a16-2e705d11255c
+credentials-file: /etc/cloudflared/76d3f4c5-9be6-485f-9a16-2e705d11255c.json
+hello-world: true
+```
+
+Next we'll create the DNS records to point to the tunnel. This can be done with a command like `cloudflared tunnel route dns instance-1 matrix.example.com` (if run without the `cert.pem` file you must use the UUID instead of the name).
+
+Finally we'll dockerize the above. The config files could be put in a volume if desired, but for now I'm storing them next to the `docker-compose.yaml`.
+
+``` yaml
+version: "3"
+services:
+  argo-tunnel:
+    image: cloudflare/cloudflared:2020.12.0
+    container_name: tunnel
+    command: ["tunnel", "--no-autoupdate", "run"]
+    volumes:
+      - "./config.yml:/etc/cloudflared/config.yml:ro"
+      - "./76d3f4c5-9be6-485f-9a16-2e705d11255c.json:/etc/cloudflared/76d3f4c5-9be6-485f-9a16-2e705d11255c.json:ro"
+    networks:
+      - tunnel
+    restart: unless-stopped
+
+networks:
+  tunnel:
+    external:
+      name: tunnel
+```
+
+The network is set up as external, so it needs to be created manually with 
+`docker network create tunnel`. This network will be the one used to communicate between services and the tunnel.
+
+`docker-compose up -d` the above and then browse to your `matrix.example.com` domain to confirm the tunnel is up and running.
+
+## Set up Postgres
+
+I'll assume you already have a postgres docker server running. Create a database for synapse. I used the following:
+
+```
+CREATE USER synapse_user WITH PASSWORD 'CHANGEME';
+CREATE DATABASE synapse ENCODING 'UTF8' LC_COLLATE='C' LC_CTYPE='C' template=template0 OWNER synapse_user;
+```
+
+## Install Synapse
+
+First we need to create a config file. The synapse docker docs recommended the following command:
+
+``` sh
+docker run -it --rm \
+    --mount type=volume,src=synapse-data,dst=/data \
+    -e SYNAPSE_SERVER_NAME=matrix.example.com \
+    -e SYNAPSE_REPORT_STATS=yes \
+    matrixdotorg/synapse:latest generate
+```
+
+This will generate a config file in a docker volume. It can be edited in a number of ways, I'm simply mounting the volume in an alpine container. I changed:
+
+``` yaml
+public_baseurl: https://matrix.example.com
+database:
+  name: psycopg2
+  args:
+    user: synapse_user
+    password: CHANGEME
+    database: synapse
+    host: postgres
+    cp_min: 5
+    cp_max: 10
+```
+
+Then we'll set up the docker-compose and `docker-compose up -d`.
+
+``` yaml
+version: "3"
+
+services:
+  synapse:
+    image: matrixdotorg/synapse:latest
+    container_name: synapse
+    environment:
+      - SYNAPSE_CONFIG_PATH=/data/homeserver.yaml
+    volumes:
+      - data:/data
+    networks:
+      - tunnel
+      - db
+    restart: unless-stopped
+
+volumes:
+  data:
+    external:
+      name: synapse-data
+
+networks:
+  tunnel:
+    external:
+      name: tunnel
+  db:
+    external:
+      name: postgres
+```
+
+## Reconfigure the tunnel to point to this instance
+
+Back in the Argo Tunnel `config.yml` we can point it to this service. The config was updated. The path value was added to prevent external client from being able to access any of the admin APIs.
+
+``` yaml
+tunnel: 76d3f4c5-9be6-485f-9a16-2e705d11255c
+credentials-file: /etc/cloudflared/76d3f4c5-9be6-485f-9a16-2e705d11255c.json
+
+ingress:
+  - hostname: matrix.example.com
+    path: (/_matrix/|/_synapse/client/).*
+    service: http://synapse:8008
+  - service: http_status:404
+```
+
+`docker-compose restart` to update the tunnel config.
+
+## Set up the Matrix .well-known URLs
+
+This is only needed if the server is using a domain other than the base domain. E.g. if `@user:example.com` exists on `matrix.example.com`. This _should_ also be able to be accomplished with SRV DNS records, but Cloudflare currently has a bug where setting the target of a SRV record to a proxied domain is just broken.
+
+Pretty much anything could be used to return the files to point to the matrix server location. As I'd already used them I created a Cloudflare Worker and routed `example.com/.well-known/matrix/*` to it. The `.well-known/matrix/server` URL simply returns: `{"m.server":"matrix.example.com:443"}`.
+
+The well-known client file is not required, but could make it so clients didn't have to remember `matrix.example.com`. Mine looks like: `{"m.homeserver":{"base_url":"https://matrix.example.com"}}`.
+
+## Test with the matrix federation tester
+
+Next we're going to test if everything is working correctly. Enter the base domain (`example.com`) in to the federation tester at:
+
+=> https://federationtester.matrix.org/
+
+## Create the first user
+
+To create a user we're going to connect to the synapse docker image with `docker exec -it synapse bash` and run `register_new_matrix_user -c /data/homeserver.yaml http://localhost:8008/`. Make sure you make them an admin.
+
+## Connect with a Matrix client
+
+Now start your favourite client and enter `@user:example.com` or `matrix.example.com` depending on how the client logs in. Don't forget to do a Secure Backup so you don't lose access to your messages
+
+## Todo:
+
+* Create systemd services to manage docker services
+* Use separate ports for federation & client?
+* Install bridges
+* Publish Worker code online
+* Use `libjemalloc` for service (maybe already in the docker image?)
+* When it's done try out `dendrite` instead of `synapse`
