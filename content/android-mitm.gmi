@@ -1,0 +1,48 @@
+# Steps for capturing Android TLS traffic
+
+## Tools (links at the end):
+
+* Genymotion: an Android emulator. It requires a licenses but is free for personal use.
+* mitmproxy: 'a free and open source interactive HTTPS proxy'.
+* Frida:  a 'dynamic instrumentation toolkit' to allow patching apps.
+* FridaLoader: 'A quick and dirty app to download and launch Frida on Genymotion'. Not strictly required, but makes it easy to run Frida.
+* objection: runtime mobile exploration
+
+## Setup
+
+Create a virtual phone in genymotion then follow the tutorial on the mitmproxy site to add a certificate to the system partition:
+=> https://docs.mitmproxy.org/stable/howto-install-system-trusted-ca-android/
+
+Open VirtualBox, find the machine, and add port forwarding for TCP port 27042 from the host to the VM. This will allow us to talk to Frida running inside.
+
+Make sure root is enabled in android, `adb install FridaLoader.apk` and the app that will be tested.
+
+Run the `Frida Loader` app on the virtual phone. Install and start Frida.
+
+Finally look up the app id from the host with `frida-ps -Uai`.
+
+## Running the app
+
+Some apps will use certificate pinning and will refuse to work through a proxy. There are multiple frida scripts that can fix this. Here's the example of how you might start an app using one of them:
+
+```
+frida -U --codeshare sowdust/universal-android-ssl-pinning-bypass-2 --no-pause -f com.example.app.id
+```
+
+The app can also be connected to using objection: `objection -g com.example.app.id explore`
+
+## Links
+
+### Tools
+
+=> https://www.genymotion.com/
+=> https://mitmproxy.org/
+=> https://frida.re/
+=> https://github.com/dineshshetty/FridaLoader/releases
+=> https://github.com/sensepost/objection
+
+### Resources
+
+=> https://medium.com/@sakshi12/root-detection-bypass-by-objection-and-frida-8a4275b67e8e
+=> https://www.secjuice.com/objection-frida-guide/
+=> https://github.com/sensepost/objection/wiki
