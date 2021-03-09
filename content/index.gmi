@@ -3,3 +3,7 @@
 
 => matrix.gmi Another Matrix setup guide, this one using Cloudflare Argo Tunnels
 => android-mitm.gmi Android app mitm setup
+
+## Notes
+
+=> rust-notes.gmi Random Rust stuff

@@ -1,0 +1,5 @@
+# Projects and reference material for Rust
+
+
+## Interesting Crates
+=> https://docs.rs/enum_dispatch/ Enum Dispatch - faster dynamically dispatch
