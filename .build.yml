@@ -1,0 +1,11 @@
+image: alpine/latest
+oauth: pages.sr.ht/PAGES:RW
+environment:
+  site: gemini.macdermid.ca
+tasks:
+- package: |
+    tar -cvz -C $site/content . > site.tar.gz
+- upload: |
+    acurl -f https://pages.sr.ht/publish/$site \
+        -Fcontent=@site.tar.gz \
+        -Fprotocol=GEMINI
