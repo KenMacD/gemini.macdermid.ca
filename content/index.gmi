@@ -1,8 +1,11 @@
+# Kenny MacDermid's geminispace
 
-## Projects
+Contact: kenny@macdermid.ca
 
-=> matrix.gmi Another Matrix setup guide, this one using Cloudflare Argo Tunnels
-=> android-mitm.gmi Android app mitm setup
+## Posts
+
+=> android-mitm.gmi 2021-02-23: Android app mitm setup
+=> matrix.gmi       2021-02-06: Another Matrix setup guide, this one using Cloudflare Argo Tunnels
 
 ## Notes
 
