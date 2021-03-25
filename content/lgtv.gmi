@@ -1,0 +1,73 @@
+# LG WebOS root persistence
+
+## How do I get root
+
+Sorry, you're on your own for that right now. There's been exploits over the years but I can't share any right now.
+
+## Version information
+
+These instructions apply to WebOS around version 3.8. This has not been tested with newer versions. The OS version should be available in:
+
+```
+/var/run/nyx/os_info.json
+```
+
+## start-devmode.sh
+
+When the TV starts with devmode enabled it will run the startup script `/media/cryptofs/apps/usr/palm/services/com.palmdts.devmode.service/start-devmode.sh`. This script is a good place to modify to inject our own commands at boot.
+
+### Disable bailing on errors:
+
+As we'll make some changes to the script it's probably a good idea to comment out the 'Exit immediately' option. Remove or comment the line:
+
+```
+set -x
+```
+
+### Run Telnetd
+
+At the start of the script, just below the shebang, we can start telnet. This will give easy access to a root shell no matter what happens in the rest of the script. This configuration does remove any authentication requirements and encryption so wouldn't be appropriate in an untrusted environment.
+
+Having a separate terminal program is preferable because the devmode shell isn't set up well for interactive use. The following line will enable it:
+
+```
+telnetd -p 9923 -l /bin/bash &
+```
+
+### Disable the devmode shutdown counter:
+
+Devmode has a shutdown counter that will cause it to be disabled after a certain amount of time. Further down in the script we can find a line saying that under some conditions devmode should be kept. The line looks like:
+
+```
+# If LGERP app (com.lgerp.appinstaller) is installed, devmode should be kept.
+if [ -d ${LGERP_APPINSTALLER_DIR} ]; then
+```
+
+This can be converted to always run instead:
+
+```
+if true; then
+```
+
+### Disable the updater
+
+As new versions of WebOS come out an updater program can show alerts asking for permission to upgrade. To avoid the risk of accidentally upgrading we can pseudo-delete the update file.
+
+The root filesystem is mounted as a read-only overlayfs. The underlying filesystem is integrity checked, so we can't simply delete the file. Instead we can mount our own overlayfs over the existing one and delete the file in there. This crates a whiteout that essentially makes the file appear deleted. To do this the following was added just below the telnet line:
+
+```
+mkdir /tmp/rmupdate
+mkdir /tmp/rmupdate/upper
+mkdir /tmp/rmupdate/work
+mount -t overlay -o lowerdir=/usr/sbin/,upperdir=/tmp/rmupdate/upper/,workdir=/tmp/rmupdate/work/ overlay-rm /usr/sbin/
+rm /usr/sbin/update
+mount -o remount,ro /usr/sbin
+```
+
+What this does is create a `/tmp/rmupdate` location to store the new overlayfs. The filesystem is directly in `tmp` here, but it could probably also be created with something like:
+
+```
+mount -t tmpfs -o "size=1M" overlay-rw /tmp/rmupdate
+```
+
+The new overlay is then mounted over `/usr/sbin`, which allows the deletion of the `/usr/sbin/update` file. Finally the overlay is converted to read-only so that no other modifications will be made that could increase the size of the overlayfs.
